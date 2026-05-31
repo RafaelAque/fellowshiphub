@@ -1,0 +1,5 @@
+[functions.summarize-session]
+verify_jwt = false
+
+[functions.bible-assistant]
+verify_jwt = false
