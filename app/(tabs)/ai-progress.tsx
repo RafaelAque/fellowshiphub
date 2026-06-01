@@ -720,7 +720,7 @@ export default function AIProgress() {
                 style={styles.bibleAssistantButton}
                 onPress={openBibleAssistant}
               >
-                Bible Assistant
+                Speak to Luce
               </Button>
             </View>
             <Text style={[styles.summaryText, { color: colors.text }]}>
@@ -927,7 +927,7 @@ export default function AIProgress() {
                         <MaterialCommunityIcons name="book-cross" size={28} color={colors.text} />
                       </View>
                       <View>
-                        <Text variant="titleLarge" style={[styles.bibleTitle, { color: colors.text }]}>Bible Assistant</Text>
+                        <Text variant="titleLarge" style={[styles.bibleTitle, { color: colors.text }]}>Speak to Luce</Text>
                         <Text style={[styles.bibleSubtitle, { color: colors.muted }]}>Ask for guidance, encouragement, and Bible references.</Text>
                       </View>
                     </View>

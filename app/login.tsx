@@ -14,13 +14,14 @@ function removeWhitespace(value: string) {
 export default function Login() {
   const router = useRouter();
   const params = useLocalSearchParams<{ next?: string }>();
-  const { currentUser, loading, login, requestPasswordReset, resetPassword } = useAppRole();
+  const { currentUser, loading, login, requestPasswordReset, resetPassword, signInWithGoogle } = useAppRole();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setSelectedRole] = useState<'member' | 'admin'>('member');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [resetOpen, setResetOpen] = useState(false);
@@ -140,6 +141,16 @@ export default function Login() {
     setTwoFactorOpen(false);
     setTwoFactorCode('');
     router.replace(afterLoginRoute);
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleSubmitting(true);
+    const result = await signInWithGoogle(role);
+    setGoogleSubmitting(false);
+
+    if (!result.ok) {
+      Alert.alert('Google sign-in failed', result.message ?? 'Unable to continue with Google.');
+    }
   };
 
   const handleForgotPassword = async () => {
@@ -297,6 +308,18 @@ export default function Login() {
 
           <Button mode="contained" onPress={handleLogin} style={styles.button} textColor="#ffffff" loading={submitting} disabled={submitting}>
             Sign In
+          </Button>
+
+          <Button
+            mode="outlined"
+            onPress={handleGoogleLogin}
+            style={styles.googleButton}
+            textColor="#111827"
+            icon="google"
+            loading={googleSubmitting}
+            disabled={googleSubmitting}
+          >
+            Continue with Google
           </Button>
 
           <View style={styles.links}>
@@ -513,6 +536,7 @@ const styles = StyleSheet.create({
   pickerWrap: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 4, overflow: 'hidden', marginTop: -2 },
   picker: { height: 50, width: '100%' },
   button: { marginTop: 10, backgroundColor: '#111827' },
+  googleButton: { marginTop: 8, borderColor: '#111827' },
   links: { alignItems: 'center', gap: 4, marginTop: 8 },
   modalWrap: { padding: 20 },
   resetCard: {

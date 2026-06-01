@@ -178,6 +178,7 @@ type AppRoleContextValue = {
   setThemeMode: (mode: ThemeMode) => void;
   toggleThemeMode: () => void;
   login: (identifier: string, password: string, role: AppRole, displayName?: string, twoFactorCode?: string) => Promise<{ ok: boolean; message?: string; requiresTwoFactor?: boolean }>;
+  signInWithGoogle: (role: AppRole) => Promise<{ ok: boolean; message?: string }>;
   register: (email: string, password: string) => Promise<{ ok: boolean; message?: string }>;
   requestPasswordReset: (email: string) => Promise<{ ok: boolean; message?: string; method?: 'email' | 'code' }>;
   resetPassword: (email: string, nextPassword: string) => Promise<{ ok: boolean; message?: string }>;
@@ -206,6 +207,7 @@ type AppRoleContextValue = {
 
 const STORE_KEY = 'fellowshiphub-store-v3';
 const LEGACY_STORE_KEY = 'fellowshiphub-demo-store-v2';
+const GOOGLE_ROLE_KEY = 'fellowshiphub-google-role';
 const STORE_FILE = `${FileSystem.documentDirectory ?? ''}fellowshiphub-store.json`;
 const LEGACY_STORE_FILE = `${FileSystem.documentDirectory ?? ''}fellowshiphub-demo-store.json`;
 const REMOVED_SAMPLE_USER_IDS = ['member-john', 'admin-main', 'member-mary', 'member-paul'];
@@ -853,6 +855,40 @@ function getPasswordResetRedirectUrl() {
   return 'myapp://reset-password';
 }
 
+function getAuthRedirectUrl() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.origin}/`;
+  }
+
+  const configuredBaseUrl = (
+    process.env.EXPO_PUBLIC_APP_BASE_URL
+    ?? process.env.EXPO_PUBLIC_ATTENDANCE_BASE_URL
+  )?.replace(/\/$/, '');
+
+  return configuredBaseUrl ?? 'myapp://';
+}
+
+function savePendingGoogleRole(role: AppRole) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.localStorage.setItem(GOOGLE_ROLE_KEY, role);
+  }
+}
+
+function readPendingGoogleRole() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return 'member' as AppRole;
+  }
+
+  const role = window.localStorage.getItem(GOOGLE_ROLE_KEY);
+  return role === 'admin' ? 'admin' : 'member';
+}
+
+function clearPendingGoogleRole() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.localStorage.removeItem(GOOGLE_ROLE_KEY);
+  }
+}
+
 async function readSupabaseAuthenticatedProfile(defaultRole: AppRole = 'member') {
   if (!supabase) return null;
 
@@ -906,8 +942,18 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
     readPersistedState().then(async (state) => {
       if (!mounted) return;
       const remoteData = isSupabaseConfigured ? await readSupabaseData() : null;
-      const nextData = remoteData ? mergeLocalSecurityFields(remoteData, state.data) : state.data;
-      setSessionUserId(state.sessionUserId);
+      let nextData = remoteData ? mergeLocalSecurityFields(remoteData, state.data) : state.data;
+      let nextSessionUserId = state.sessionUserId;
+      const authenticatedProfile = await readSupabaseAuthenticatedProfile(readPendingGoogleRole());
+
+      if (authenticatedProfile) {
+        nextData = upsertDataUser(nextData, authenticatedProfile);
+        nextSessionUserId = authenticatedProfile.id;
+        clearPendingGoogleRole();
+        void saveUserToSupabase(authenticatedProfile);
+      }
+
+      setSessionUserId(nextSessionUserId);
       setThemeMode(state.themeMode ?? 'light');
       setData(mergeSeedUsers(nextData));
       setLoading(false);
@@ -1040,6 +1086,30 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
       }
 
       setSessionUserId(existingLocalUser.id);
+      return { ok: true };
+    },
+    signInWithGoogle: async (nextRole) => {
+      if (!supabase) {
+        return { ok: false, message: 'Supabase is not configured yet.' };
+      }
+
+      if (Platform.OS !== 'web') {
+        return { ok: false, message: 'Google sign-in is currently available on the web version. Use email login on Expo Go for now.' };
+      }
+
+      savePendingGoogleRole(nextRole);
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: getAuthRedirectUrl(),
+        },
+      });
+
+      if (error) {
+        return { ok: false, message: error.message };
+      }
+
       return { ok: true };
     },
     register: async (email, password) => {
