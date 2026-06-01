@@ -839,10 +839,6 @@ function verifyTwoFactorIfNeeded(user: DemoUser, code?: string) {
 }
 
 function getPasswordResetRedirectUrl() {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/reset-password`;
-  }
-
   const configuredBaseUrl = (
     process.env.EXPO_PUBLIC_APP_BASE_URL
     ?? process.env.EXPO_PUBLIC_ATTENDANCE_BASE_URL
@@ -852,20 +848,28 @@ function getPasswordResetRedirectUrl() {
     return `${configuredBaseUrl}/reset-password`;
   }
 
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.origin}/reset-password`;
+  }
+
   return 'myapp://reset-password';
 }
 
 function getAuthRedirectUrl() {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/`;
-  }
-
   const configuredBaseUrl = (
     process.env.EXPO_PUBLIC_APP_BASE_URL
     ?? process.env.EXPO_PUBLIC_ATTENDANCE_BASE_URL
   )?.replace(/\/$/, '');
 
-  return configuredBaseUrl ?? 'myapp://';
+  if (configuredBaseUrl) {
+    return `${configuredBaseUrl}/`;
+  }
+
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.origin}/`;
+  }
+
+  return 'myapp://';
 }
 
 function savePendingGoogleRole(role: AppRole) {
