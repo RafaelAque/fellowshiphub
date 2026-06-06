@@ -128,6 +128,16 @@ export type SessionSummary = {
   createdAt: string;
 };
 
+export type MeetingTranscriptSegment = {
+  id: string;
+  sessionId: string;
+  speaker: string;
+  text: string;
+  confidence?: number;
+  possibleSpeaker?: string;
+  createdAt: string;
+};
+
 type DemoData = {
   users: DemoUser[];
   sessions: FellowshipSession[];
@@ -135,6 +145,7 @@ type DemoData = {
   feedbackEntries: FeedbackEntry[];
   chatMessages: ChatMessage[];
   sessionSummaries: SessionSummary[];
+  meetingTranscriptSegments: MeetingTranscriptSegment[];
   meetingGroups: MeetingGroup[];
   meetingInvites: MeetingInvite[];
   groupChatMessages: GroupChatMessage[];
@@ -170,6 +181,7 @@ type AppRoleContextValue = {
   feedbackEntries: FeedbackEntry[];
   chatMessages: ChatMessage[];
   sessionSummaries: SessionSummary[];
+  meetingTranscriptSegments: MeetingTranscriptSegment[];
   meetingGroups: MeetingGroup[];
   meetingInvites: MeetingInvite[];
   groupChatMessages: GroupChatMessage[];
@@ -197,19 +209,21 @@ type AppRoleContextValue = {
   sendAiMessage: (text: string) => Promise<void>;
   saveSessionSummary: (input: Omit<SessionSummary, 'id' | 'userId' | 'userName' | 'createdAt'>) => Promise<void>;
   deleteSessionSummary: (summaryId: string) => Promise<{ ok: boolean; message?: string }>;
+  addMeetingTranscriptSegment: (input: Omit<MeetingTranscriptSegment, 'id' | 'createdAt'>) => Promise<void>;
+  correctMeetingTranscriptSpeaker: (input: { sessionId: string; fromSpeaker: string; toSpeaker: string }) => Promise<void>;
+  clearMeetingTranscript: (sessionId: string) => Promise<void>;
   createMeetingGroup: (input: { name: string; sessionId: string; memberIds: string[] }) => Promise<{ ok: boolean; message?: string }>;
   respondMeetingInvite: (inviteId: string, status: MeetingInvite['status']) => Promise<{ ok: boolean; message?: string }>;
   sendGroupMessage: (groupId: string, text: string) => Promise<{ ok: boolean; message?: string }>;
   startMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string }>;
   joinMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string }>;
+  leaveMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string; closed?: boolean }>;
   closeMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string }>;
 };
 
 const STORE_KEY = 'fellowshiphub-store-v3';
-const LEGACY_STORE_KEY = 'fellowshiphub-demo-store-v2';
 const GOOGLE_ROLE_KEY = 'fellowshiphub-google-role';
 const STORE_FILE = `${FileSystem.documentDirectory ?? ''}fellowshiphub-store.json`;
-const LEGACY_STORE_FILE = `${FileSystem.documentDirectory ?? ''}fellowshiphub-demo-store.json`;
 const REMOVED_SAMPLE_USER_IDS = ['member-john', 'admin-main', 'member-mary', 'member-paul'];
 const REMOVED_SAMPLE_USER_EMAILS = [
   'john@fellowshiphub.app',
@@ -241,6 +255,7 @@ const seedData: DemoData = {
   feedbackEntries: [],
   chatMessages: [],
   sessionSummaries: [],
+  meetingTranscriptSegments: [],
   meetingGroups: [],
   meetingInvites: [],
   groupChatMessages: [],
@@ -268,6 +283,8 @@ type SessionRow = {
   session_time: string;
   location: string;
   status: FellowshipSession['status'];
+  host_id?: string | null;
+  host_name?: string | null;
 };
 
 type AttendanceRow = {
@@ -338,6 +355,7 @@ function removeRemovedSampleData(data: DemoData): DemoData {
     feedbackEntries: data.feedbackEntries.filter((entry) => activeUserIds.has(entry.userId)),
     chatMessages: data.chatMessages.filter((message) => activeUserIds.has(message.userId)),
     sessionSummaries: (data.sessionSummaries ?? []).filter((summary) => activeUserIds.has(summary.userId)),
+    meetingTranscriptSegments: data.meetingTranscriptSegments ?? [],
     meetingGroups: (data.meetingGroups ?? []).filter((group) => activeUserIds.has(group.createdById)),
     meetingInvites: (data.meetingInvites ?? []).filter((invite) => activeUserIds.has(invite.senderId) && activeUserIds.has(invite.recipientId)),
     groupChatMessages: (data.groupChatMessages ?? []).filter((message) => activeUserIds.has(message.senderId)),
@@ -384,6 +402,7 @@ function mergeSeedUsers(data: DemoData) {
     ...data,
     users,
     sessionSummaries: data.sessionSummaries ?? [],
+    meetingTranscriptSegments: data.meetingTranscriptSegments ?? [],
     meetingGroups: data.meetingGroups ?? [],
     meetingInvites: data.meetingInvites ?? [],
     groupChatMessages: data.groupChatMessages ?? [],
@@ -398,6 +417,7 @@ function mergeLocalSecurityFields(remoteData: DemoData, localData: DemoData) {
     meetingInvites: localData.meetingInvites ?? [],
     groupChatMessages: localData.groupChatMessages ?? [],
     meetingLogs: localData.meetingLogs ?? [],
+    meetingTranscriptSegments: localData.meetingTranscriptSegments ?? [],
     users: remoteData.users.map((remoteUser) => {
       const localUser = localData.users.find((user) => user.id === remoteUser.id || user.email.toLowerCase() === remoteUser.email.toLowerCase());
 
@@ -436,6 +456,8 @@ function sessionToRow(session: FellowshipSession): SessionRow {
     session_time: session.time,
     location: session.location,
     status: session.status,
+    host_id: session.hostId ?? null,
+    host_name: session.hostName ?? null,
   };
 }
 
@@ -515,6 +537,8 @@ function rowToSession(row: SessionRow): FellowshipSession {
     time: row.session_time,
     location: row.location,
     status: row.status,
+    hostId: row.host_id ?? undefined,
+    hostName: row.host_name ?? undefined,
   };
 }
 
@@ -588,7 +612,7 @@ async function readSupabaseData(): Promise<DemoData | null> {
 
   const [profiles, sessions, attendanceRecords, feedbackEntries, chatMessages, sessionSummaries] = await Promise.all([
     supabase.from('profiles').select('id,name,email,role,initials,created_at,phone,birth_date,address').order('name'),
-    supabase.from('fellowship_sessions').select('id,title,session_date,session_time,location,status').order('created_at'),
+    supabase.from('fellowship_sessions').select('id,title,session_date,session_time,location,status,host_id,host_name').order('created_at'),
     supabase.from('attendance_records').select('id,user_id,user_name,session_id,session,attendance_date,status,notes,checked_in_at').order('created_at', { ascending: false }),
     supabase.from('feedback_entries').select('id,user_id,user_name,session_id,session,feedback_date,rating,learned,suggestions,submitted_at').order('submitted_at', { ascending: false }),
     supabase.from('chat_messages').select('id,user_id,author,text,created_at').order('created_at'),
@@ -614,16 +638,12 @@ async function readSupabaseData(): Promise<DemoData | null> {
     feedbackEntries: ((feedbackEntries.data ?? []) as FeedbackRow[]).map(rowToFeedback),
     chatMessages: ((chatMessages.data ?? []) as ChatRow[]).map(rowToChat),
     sessionSummaries: sessionSummaries.error ? [] : ((sessionSummaries.data ?? []) as SummaryRow[]).map(rowToSummary),
+    meetingTranscriptSegments: [],
     meetingGroups: [],
     meetingInvites: [],
     groupChatMessages: [],
     meetingLogs: [],
   });
-}
-
-async function deleteRemovedSampleAccountsFromSupabase() {
-  if (!supabase) return;
-  await supabase.from('profiles').delete().in('id', REMOVED_SAMPLE_USER_IDS);
 }
 
 async function saveUserToSupabase(user: DemoUser) {
@@ -991,6 +1011,7 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
     feedbackEntries: data.feedbackEntries,
     chatMessages: data.chatMessages,
     sessionSummaries: data.sessionSummaries ?? [],
+    meetingTranscriptSegments: data.meetingTranscriptSegments ?? [],
     meetingGroups: data.meetingGroups ?? [],
     meetingInvites: data.meetingInvites ?? [],
     groupChatMessages: data.groupChatMessages ?? [],
@@ -1496,6 +1517,7 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
           const group = (current.meetingGroups ?? []).find((candidate) => candidate.id === message.groupId);
           return group?.sessionId !== sessionId;
         }),
+        meetingTranscriptSegments: (current.meetingTranscriptSegments ?? []).filter((segment) => segment.sessionId !== sessionId),
         meetingLogs: (current.meetingLogs ?? []).filter((log) => log.sessionId !== sessionId),
       }));
       void deleteSessionFromSupabase(sessionId);
@@ -1635,6 +1657,55 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
       }));
       void deleteSummaryFromSupabase(summaryId);
       return { ok: true };
+    },
+    addMeetingTranscriptSegment: async (input) => {
+      const text = input.text.replace(/\s+/g, ' ').trim();
+
+      if (!text) {
+        return;
+      }
+
+      const nextSegment: MeetingTranscriptSegment = {
+        ...input,
+        text,
+        id: makeId('meeting-transcript'),
+        createdAt: new Date().toISOString(),
+      };
+
+      setData((current) => ({
+        ...current,
+        meetingTranscriptSegments: [
+          ...(current.meetingTranscriptSegments ?? []),
+          nextSegment,
+        ],
+      }));
+    },
+    correctMeetingTranscriptSpeaker: async ({ sessionId, fromSpeaker, toSpeaker }) => {
+      const nextSpeaker = toSpeaker.trim();
+
+      if (!nextSpeaker) {
+        return;
+      }
+
+      setData((current) => ({
+        ...current,
+        meetingTranscriptSegments: (current.meetingTranscriptSegments ?? []).map((segment) => (
+          segment.sessionId === sessionId && segment.speaker === fromSpeaker
+            ? {
+                ...segment,
+                speaker: nextSpeaker,
+                possibleSpeaker: undefined,
+                confidence: 100,
+              }
+            : segment
+        )),
+      }));
+    },
+    clearMeetingTranscript: async (sessionId) => {
+      setData((current) => ({
+        ...current,
+        meetingTranscriptSegments: (current.meetingTranscriptSegments ?? []).filter((segment) => segment.sessionId !== sessionId),
+      }));
     },
     createMeetingGroup: async (input) => {
       if (!currentUser) {
@@ -1815,7 +1886,10 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, message: 'This meeting has not started yet.' };
       }
 
-      if (liveLog.participantIds.includes(currentUser.id)) {
+      const alreadyJoined = liveLog.participantIds.includes(currentUser.id)
+        || liveLog.participantNames.includes(currentUser.name);
+
+      if (alreadyJoined) {
         return { ok: true, message: 'You are already participating.' };
       }
 
@@ -1825,8 +1899,41 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
           log.id === liveLog.id
             ? {
                 ...log,
-                participantIds: [...log.participantIds, currentUser.id],
-                participantNames: [...log.participantNames, currentUser.name],
+                participantIds: [...new Set([...log.participantIds, currentUser.id])],
+                participantNames: [...new Set([...log.participantNames, currentUser.name])],
+              }
+            : log
+        )),
+      }));
+
+      return { ok: true };
+    },
+    leaveMeeting: async (sessionId) => {
+      if (!currentUser) {
+        return { ok: false, message: 'Please log in first.' };
+      }
+
+      const liveLog = (data.meetingLogs ?? []).find((log) => log.sessionId === sessionId && log.status === 'live');
+
+      if (!liveLog) {
+        return { ok: false, message: 'This meeting is not live.' };
+      }
+
+      const isParticipant = liveLog.participantIds.includes(currentUser.id)
+        || liveLog.participantNames.includes(currentUser.name);
+
+      if (!isParticipant) {
+        return { ok: true, message: 'You are not currently in this meeting.' };
+      }
+
+      setData((current) => ({
+        ...current,
+        meetingLogs: (current.meetingLogs ?? []).map((log) => (
+          log.id === liveLog.id
+            ? {
+                ...log,
+                participantIds: log.participantIds.filter((id) => id !== currentUser.id),
+                participantNames: log.participantNames.filter((name) => name !== currentUser.name),
               }
             : log
         )),
@@ -1845,10 +1952,11 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, message: 'This meeting is not live.' };
       }
 
-      const participant = liveLog.participantIds.includes(currentUser.id);
+      const session = data.sessions.find((candidate) => candidate.id === sessionId);
+      const meetingOwnerId = session?.hostId ?? liveLog.startedById;
 
-      if (role !== 'admin' && liveLog.startedById !== currentUser.id && !participant) {
-        return { ok: false, message: 'Only a participant can close this meeting.' };
+      if (meetingOwnerId !== currentUser.id) {
+        return { ok: false, message: 'Only the meeting creator can end this meeting.' };
       }
 
       const endedAt = new Date().toISOString();

@@ -83,6 +83,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="meeting-room"
+        options={{
+          tabBarLabel: 'Meeting Room',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="video-outline" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="inbox"
         options={{
           tabBarLabel: 'Inbox',

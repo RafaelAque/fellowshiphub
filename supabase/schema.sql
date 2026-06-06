@@ -23,8 +23,13 @@ create table if not exists public.fellowship_sessions (
   session_time text not null,
   location text not null,
   status text not null check (status in ('open', 'upcoming', 'completed')),
+  host_id text,
+  host_name text,
   created_at timestamptz not null default now()
 );
+
+alter table public.fellowship_sessions add column if not exists host_id text;
+alter table public.fellowship_sessions add column if not exists host_name text;
 
 create table if not exists public.attendance_records (
   id text primary key,
