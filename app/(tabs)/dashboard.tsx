@@ -3,15 +3,16 @@ import {
   Alert,
   Animated,
   Easing,
+  Platform,
   Pressable,
   StyleSheet,
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Button, Card, DataTable, Portal, Text } from 'react-native-paper';
+import { Badge, Button, Card, Chip, DataTable, Dialog, Portal, Text, TextInput } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppShell } from '@/components/app-shell';
-import { useAppRole } from '@/components/app-role-context';
+import { Announcement, AnnouncementPriority, useAppRole } from '@/components/app-role-context';
 import { useRouter } from 'expo-router';
 
 const memberActions = [
@@ -29,10 +30,35 @@ const adminActions = [
 
 export default function Dashboard() {
   const router = useRouter();
-  const { attendanceRecords, currentUser, feedbackEntries, role, sessions, themeMode, users } = useAppRole();
+  const {
+    announcements,
+    attendanceRecords,
+    createAnnouncement,
+    currentUser,
+    deleteAnnouncement,
+    feedbackEntries,
+    role,
+    sessions,
+    themeMode,
+    updateAnnouncement,
+    users,
+  } = useAppRole();
   const { width } = useWindowDimensions();
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [announcementSearch, setAnnouncementSearch] = useState('');
+  const [announcementFilter, setAnnouncementFilter] = useState<'All' | 'Pinned' | 'Important' | 'Recent'>('All');
+  const [announcementDialogOpen, setAnnouncementDialogOpen] = useState(false);
+  const [announcementDetail, setAnnouncementDetail] = useState<Announcement | null>(null);
+  const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
+  const [formTitle, setFormTitle] = useState('');
+  const [formContent, setFormContent] = useState('');
+  const [formPriority, setFormPriority] = useState<AnnouncementPriority>('Normal');
+  const [formPinned, setFormPinned] = useState(false);
+  const [luceHidden, setLuceHidden] = useState(false);
+  const [luceOpen, setLuceOpen] = useState(false);
+  const [verseIndex, setVerseIndex] = useState(0);
   const panelTranslate = useRef(new Animated.Value(360)).current;
+  const luceFloat = useRef(new Animated.Value(0)).current;
   const isAdmin = role === 'admin';
   const compactPanel = width < 520;
   const openSession = sessions.find((session) => session.status === 'open') ?? sessions[0];
@@ -106,6 +132,33 @@ export default function Dashboard() {
         };
       })
   ), [attendanceRecords, users]);
+  const visibleAnnouncements = useMemo(() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const query = announcementSearch.trim().toLowerCase();
+
+    return (announcements ?? [])
+      .filter((announcement) => !announcement.archived || isAdmin)
+      .filter((announcement) => {
+        if (announcementFilter === 'Pinned') return announcement.pinned;
+        if (announcementFilter === 'Important') return announcement.priority !== 'Normal';
+        if (announcementFilter === 'Recent') return new Date(announcement.createdAt).getTime() >= sevenDaysAgo;
+        return true;
+      })
+      .filter((announcement) => (
+        !query ||
+        announcement.title.toLowerCase().includes(query) ||
+        announcement.content.toLowerCase().includes(query) ||
+        announcement.createdByName.toLowerCase().includes(query)
+      ))
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }, [announcementFilter, announcementSearch, announcements, isAdmin]);
+  const recentAnnouncementCount = useMemo(() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return (announcements ?? []).filter((announcement) => !announcement.archived && new Date(announcement.createdAt).getTime() >= sevenDaysAgo).length;
+  }, [announcements]);
 
   useEffect(() => {
     Animated.timing(panelTranslate, {
@@ -115,6 +168,213 @@ export default function Dashboard() {
       useNativeDriver: true,
     }).start();
   }, [actionsOpen, panelTranslate]);
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(luceFloat, {
+          toValue: -8,
+          duration: 1500,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(luceFloat, {
+          toValue: 0,
+          duration: 1500,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [luceFloat]);
+
+  const openAnnouncementForm = (announcement?: Announcement) => {
+    setEditingAnnouncement(announcement ?? null);
+    setFormTitle(announcement?.title ?? '');
+    setFormContent(announcement?.content ?? '');
+    setFormPriority(announcement?.priority ?? 'Normal');
+    setFormPinned(Boolean(announcement?.pinned));
+    setAnnouncementDialogOpen(true);
+  };
+
+  const saveAnnouncement = async () => {
+    const result = editingAnnouncement
+      ? await updateAnnouncement(editingAnnouncement.id, {
+          title: formTitle,
+          content: formContent,
+          priority: formPriority,
+          pinned: formPinned,
+          archived: editingAnnouncement.archived,
+        })
+      : await createAnnouncement({
+          title: formTitle,
+          content: formContent,
+          priority: formPriority,
+          pinned: formPinned,
+        });
+
+    if (!result.ok) {
+      Alert.alert('Announcement', result.message ?? 'Unable to save announcement.');
+      return;
+    }
+
+    setAnnouncementDialogOpen(false);
+    setEditingAnnouncement(null);
+  };
+
+  const archiveAnnouncement = async (announcement: Announcement) => {
+    const result = await updateAnnouncement(announcement.id, {
+      title: announcement.title,
+      content: announcement.content,
+      priority: announcement.priority,
+      pinned: announcement.pinned,
+      archived: !announcement.archived,
+    });
+
+    if (!result.ok) {
+      Alert.alert('Announcement', result.message ?? 'Unable to update announcement.');
+    }
+  };
+
+  const confirmDeleteAnnouncement = (announcement: Announcement) => {
+    Alert.alert(
+      'Delete announcement?',
+      `Delete "${announcement.title}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await deleteAnnouncement(announcement.id);
+            if (!result.ok) {
+              Alert.alert('Announcement', result.message ?? 'Unable to delete announcement.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const nextVerse = () => {
+    setVerseIndex((current) => {
+      if (BIBLE_VERSES.length <= 1) return current;
+      let next = Math.floor(Math.random() * BIBLE_VERSES.length);
+      while (next === current) {
+        next = Math.floor(Math.random() * BIBLE_VERSES.length);
+      }
+      return next;
+    });
+  };
+
+  const openLuce = () => {
+    nextVerse();
+    setLuceOpen(true);
+  };
+
+  const copyVerse = () => {
+    const verse = BIBLE_VERSES[verseIndex];
+    const text = `${verse.text}\n- ${verse.reference}`;
+
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(text);
+    }
+
+    Alert.alert('Copied', 'Verse copied for sharing.');
+  };
+
+  const renderAnnouncements = () => (
+    <Card mode="outlined" style={[styles.announcementsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Card.Content style={styles.announcementsContent}>
+        <View style={styles.announcementsHeader}>
+          <View style={styles.announcementsTitleWrap}>
+            <View style={styles.announcementsTitleRow}>
+              <Text variant="titleMedium" style={[styles.sectionTitle, { color: colors.text }]}>Announcements</Text>
+              {recentAnnouncementCount ? <Badge style={styles.announcementBadge}>{recentAnnouncementCount}</Badge> : null}
+            </View>
+            <Text style={[styles.announcementsSubtitle, { color: colors.muted }]}>
+              Church updates, reminders, and important messages.
+            </Text>
+          </View>
+          {isAdmin ? (
+            <Button mode="contained" icon="plus" onPress={() => openAnnouncementForm()}>
+              New
+            </Button>
+          ) : null}
+        </View>
+
+        <TextInput
+          mode="outlined"
+          label="Search announcements"
+          value={announcementSearch}
+          onChangeText={setAnnouncementSearch}
+          left={<TextInput.Icon icon="magnify" />}
+          style={styles.announcementSearch}
+        />
+
+        <View style={styles.filterRow}>
+          {(['All', 'Pinned', 'Important', 'Recent'] as const).map((filter) => (
+            <Chip
+              key={filter}
+              selected={announcementFilter === filter}
+              onPress={() => setAnnouncementFilter(filter)}
+              style={styles.filterChip}
+            >
+              {filter}
+            </Chip>
+          ))}
+        </View>
+
+        <View style={styles.announcementList}>
+          {visibleAnnouncements.length ? visibleAnnouncements.map((announcement) => (
+            <Card
+              key={announcement.id}
+              mode="outlined"
+              style={[styles.announcementItem, { backgroundColor: colors.panelItem, borderColor: colors.border }]}
+            >
+              <Card.Content style={styles.announcementItemContent}>
+                <View style={styles.announcementItemTop}>
+                  <View style={styles.announcementItemTitleWrap}>
+                    <View style={styles.announcementItemTitleRow}>
+                      {announcement.pinned ? <MaterialCommunityIcons name="pin" size={16} color={colors.text} /> : null}
+                      <Text style={[styles.announcementItemTitle, { color: colors.text }]}>{announcement.title}</Text>
+                    </View>
+                    <Text style={[styles.announcementMeta, { color: colors.muted }]}>
+                      {announcement.createdByName} - {formatDashboardDate(announcement.createdAt)}
+                    </Text>
+                  </View>
+                  <Chip compact style={priorityChipStyle(announcement.priority)} textStyle={styles.priorityText}>
+                    {announcement.priority}
+                  </Chip>
+                </View>
+                <Text style={[styles.announcementBody, { color: colors.muted }]} numberOfLines={3}>
+                  {announcement.content}
+                </Text>
+                <View style={styles.announcementActions}>
+                  <Button mode="text" icon="book-open-page-variant" textColor={colors.text} onPress={() => setAnnouncementDetail(announcement)}>
+                    Read More
+                  </Button>
+                  {isAdmin ? (
+                    <>
+                      <Button mode="text" icon="pencil" textColor={colors.text} onPress={() => openAnnouncementForm(announcement)}>Edit</Button>
+                      <Button mode="text" icon={announcement.archived ? 'archive-arrow-up' : 'archive'} textColor={colors.muted} onPress={() => archiveAnnouncement(announcement)}>
+                        {announcement.archived ? 'Restore' : 'Archive'}
+                      </Button>
+                      <Button mode="text" icon="delete" textColor="#dc2626" onPress={() => confirmDeleteAnnouncement(announcement)}>Delete</Button>
+                    </>
+                  ) : null}
+                </View>
+              </Card.Content>
+            </Card>
+          )) : (
+            <View style={[styles.emptyAnnouncements, { borderColor: colors.border }]}>
+              <MaterialCommunityIcons name="bullhorn-outline" size={30} color={colors.muted} />
+              <Text style={[styles.emptyAnnouncementText, { color: colors.muted }]}>No announcements match this view.</Text>
+            </View>
+          )}
+        </View>
+      </Card.Content>
+    </Card>
+  );
 
   return (
     <AppShell
@@ -148,6 +408,8 @@ export default function Dashboard() {
                 Open
               </Button>
             </View>
+
+            {renderAnnouncements()}
 
             <Card mode="outlined" style={[styles.tableCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Card.Content>
@@ -217,20 +479,7 @@ export default function Dashboard() {
               </Button>
             </View>
 
-            <Card
-              mode="outlined"
-              style={[styles.announcementCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => Alert.alert('Latest Announcement', 'Youth Fellowship this Saturday at 5 PM. See you there!')}
-            >
-              <Card.Content style={styles.announcementContent}>
-                <MaterialCommunityIcons name="bullhorn-outline" size={26} color={colors.text} />
-                <View style={styles.announcementCopy}>
-                  <Text style={[styles.announcementTitle, { color: colors.text }]}>Latest Announcement</Text>
-                  <Text style={[styles.announcementText, { color: colors.muted }]}>Youth Fellowship this Saturday at 5 PM. See you there!</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={24} color={colors.muted} />
-              </Card.Content>
-            </Card>
+            {renderAnnouncements()}
           </>
         )}
       </View>
@@ -293,6 +542,100 @@ export default function Dashboard() {
             </Animated.View>
           </View>
         ) : null}
+        <Dialog visible={announcementDialogOpen} onDismiss={() => setAnnouncementDialogOpen(false)} style={{ backgroundColor: colors.card }}>
+          <Dialog.Title style={{ color: colors.text }}>{editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}</Dialog.Title>
+          <Dialog.Content style={styles.dialogContent}>
+            <TextInput mode="outlined" label="Title" value={formTitle} onChangeText={setFormTitle} />
+            <TextInput
+              mode="outlined"
+              label="Message"
+              value={formContent}
+              onChangeText={setFormContent}
+              multiline
+              style={styles.announcementMessageInput}
+            />
+            <View style={styles.filterRow}>
+              {(['Normal', 'Important', 'Urgent'] as const).map((priority) => (
+                <Chip key={priority} selected={formPriority === priority} onPress={() => setFormPriority(priority)}>
+                  {priority}
+                </Chip>
+              ))}
+            </View>
+            <Chip
+              selected={formPinned}
+              icon={formPinned ? 'pin' : 'pin-outline'}
+              onPress={() => setFormPinned((current) => !current)}
+              style={styles.pinnedToggle}
+            >
+              {formPinned ? 'Pinned to top' : 'Pin announcement'}
+            </Chip>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setAnnouncementDialogOpen(false)}>Cancel</Button>
+            <Button mode="contained" onPress={saveAnnouncement}>Save</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={Boolean(announcementDetail)} onDismiss={() => setAnnouncementDetail(null)} style={{ backgroundColor: colors.card }}>
+          <Dialog.Title style={{ color: colors.text }}>{announcementDetail?.title}</Dialog.Title>
+          <Dialog.Content>
+            {announcementDetail ? (
+              <>
+                <Text style={[styles.announcementMeta, { color: colors.muted }]}>
+                  {announcementDetail.createdByName} - {formatDashboardDate(announcementDetail.createdAt)}
+                </Text>
+                <Text style={[styles.detailContent, { color: colors.text }]}>{announcementDetail.content}</Text>
+              </>
+            ) : null}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setAnnouncementDetail(null)}>Close</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={luceOpen} onDismiss={() => setLuceOpen(false)} style={{ backgroundColor: colors.card }}>
+          <Dialog.Title style={{ color: colors.text }}>Speak to Luce</Dialog.Title>
+          <Dialog.Content>
+            <Text style={[styles.luceVerse, { color: colors.text }]}>{BIBLE_VERSES[verseIndex].text}</Text>
+            <Text style={[styles.luceReference, { color: colors.muted }]}>- {BIBLE_VERSES[verseIndex].reference}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setLuceHidden(true)}>Hide Luce</Button>
+            <Button icon="content-copy" onPress={copyVerse}>Copy Verse</Button>
+            <Button mode="contained" onPress={nextVerse}>Next Verse</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        {!luceHidden ? (
+          <Animated.View style={[styles.luceWrap, { transform: [{ translateY: luceFloat }] }]}>
+            <Pressable style={[styles.luceBubble, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={openLuce}>
+              <View style={styles.sheepBody}>
+                <View style={[styles.woolPuff, styles.woolTopLeft]} />
+                <View style={[styles.woolPuff, styles.woolTop]} />
+                <View style={[styles.woolPuff, styles.woolTopRight]} />
+                <View style={[styles.woolPuff, styles.woolLeft]} />
+                <View style={[styles.woolPuff, styles.woolRight]} />
+                <View style={styles.sheepEarLeft} />
+                <View style={styles.sheepEarRight} />
+                <View style={styles.sheepFace}>
+                  <View style={styles.sheepEyeRow}>
+                    <View style={styles.sheepEye} />
+                    <View style={styles.sheepEye} />
+                  </View>
+                  <Text style={styles.sheepMouth}>u</Text>
+                </View>
+                <View style={styles.sheepLegRow}>
+                  <View style={styles.sheepLeg} />
+                  <View style={styles.sheepLeg} />
+                </View>
+              </View>
+              <Text style={[styles.luceName, { color: colors.text }]}>Luce</Text>
+            </Pressable>
+            <Pressable style={styles.luceClose} onPress={() => setLuceHidden(true)}>
+              <MaterialCommunityIcons name="close" size={14} color="#ffffff" />
+            </Pressable>
+          </Animated.View>
+        ) : null}
       </Portal>
     </AppShell>
   );
@@ -312,8 +655,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   statCard: {
-    flexBasis: 180,
+    flexBasis: 150,
     flexGrow: 1,
+    minWidth: 0,
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
   },
@@ -322,11 +666,54 @@ const styles = StyleSheet.create({
   statLabel: { color: '#374151', textAlign: 'center', fontWeight: '600' },
   sectionTitle: { fontWeight: '800', color: '#111827' },
   tableCard: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
-  announcementCard: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
-  announcementContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  announcementCopy: { flex: 1 },
-  announcementTitle: { fontWeight: '800', color: '#111827' },
-  announcementText: { color: '#374151', marginTop: 2 },
+  announcementsCard: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
+  announcementsContent: { gap: 14 },
+  announcementsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 },
+  announcementsTitleWrap: { flex: 1, minWidth: 220 },
+  announcementsTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  announcementBadge: { backgroundColor: '#111827', color: '#ffffff' },
+  announcementsSubtitle: { marginTop: 2 },
+  announcementSearch: { backgroundColor: 'transparent' },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  filterChip: { marginRight: 0 },
+  announcementList: { gap: 10 },
+  announcementItem: { borderRadius: 8 },
+  announcementItemContent: { gap: 10 },
+  announcementItemTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
+  announcementItemTitleWrap: { flex: 1, minWidth: 0 },
+  announcementItemTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  announcementItemTitle: { fontWeight: '900', fontSize: 16 },
+  announcementMeta: { fontSize: 12, fontWeight: '600' },
+  announcementBody: { lineHeight: 20 },
+  announcementActions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  priorityText: { fontSize: 11, fontWeight: '800' },
+  emptyAnnouncements: { borderWidth: 1, borderRadius: 8, padding: 18, alignItems: 'center', gap: 8 },
+  emptyAnnouncementText: { textAlign: 'center' },
+  dialogContent: { gap: 12 },
+  announcementMessageInput: { minHeight: 120 },
+  pinnedToggle: { alignSelf: 'flex-start' },
+  detailContent: { marginTop: 14, lineHeight: 22 },
+  luceVerse: { fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  luceReference: { marginTop: 10, fontWeight: '800' },
+  luceWrap: { position: 'absolute', right: 18, bottom: 18, zIndex: 40 },
+  luceBubble: { borderWidth: 1, borderRadius: 18, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
+  sheepBody: { width: 58, height: 58, alignItems: 'center', justifyContent: 'center' },
+  woolPuff: { position: 'absolute', width: 28, height: 28, borderRadius: 14, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e5e7eb' },
+  woolTopLeft: { top: 3, left: 8 },
+  woolTop: { top: 0, left: 20 },
+  woolTopRight: { top: 3, right: 8 },
+  woolLeft: { top: 17, left: 4 },
+  woolRight: { top: 17, right: 4 },
+  sheepEarLeft: { position: 'absolute', width: 14, height: 20, borderRadius: 8, backgroundColor: '#d1d5db', left: 8, top: 22, transform: [{ rotate: '-18deg' }] },
+  sheepEarRight: { position: 'absolute', width: 14, height: 20, borderRadius: 8, backgroundColor: '#d1d5db', right: 8, top: 22, transform: [{ rotate: '18deg' }] },
+  sheepFace: { width: 38, height: 42, borderRadius: 20, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', marginTop: 10 },
+  sheepEyeRow: { flexDirection: 'row', gap: 8, marginBottom: 3 },
+  sheepEye: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#ffffff' },
+  sheepMouth: { color: '#ffffff', fontWeight: '900', lineHeight: 14 },
+  sheepLegRow: { position: 'absolute', bottom: 0, flexDirection: 'row', gap: 16 },
+  sheepLeg: { width: 7, height: 10, borderRadius: 4, backgroundColor: '#111827' },
+  luceName: { marginTop: 5, fontWeight: '900', fontSize: 12 },
+  luceClose: { position: 'absolute', right: -6, top: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   launcherButton: { paddingHorizontal: 12 },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -378,3 +765,72 @@ const styles = StyleSheet.create({
   panelActionTitle: { color: '#111827', fontWeight: '800' },
   panelActionNote: { color: '#374151', marginTop: 2, lineHeight: 18 },
 });
+
+function priorityChipStyle(priority: AnnouncementPriority) {
+  if (priority === 'Urgent') {
+    return { backgroundColor: '#fee2e2' };
+  }
+
+  if (priority === 'Important') {
+    return { backgroundColor: '#fef3c7' };
+  }
+
+  return { backgroundColor: '#e5e7eb' };
+}
+
+function formatDashboardDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+const BIBLE_VERSES = [
+  {
+    reference: 'Jeremiah 29:11',
+    text: '"For I know the plans I have for you," declares the Lord, "plans to prosper you and not to harm you, plans to give you hope and a future."',
+  },
+  {
+    reference: 'Psalm 23:1',
+    text: 'The Lord is my shepherd, I lack nothing.',
+  },
+  {
+    reference: 'Isaiah 41:10',
+    text: 'So do not fear, for I am with you; do not be dismayed, for I am your God.',
+  },
+  {
+    reference: 'Matthew 11:28',
+    text: 'Come to me, all you who are weary and burdened, and I will give you rest.',
+  },
+  {
+    reference: 'Philippians 4:13',
+    text: 'I can do all this through him who gives me strength.',
+  },
+  {
+    reference: 'Proverbs 3:5',
+    text: 'Trust in the Lord with all your heart and lean not on your own understanding.',
+  },
+  {
+    reference: 'Romans 8:28',
+    text: 'And we know that in all things God works for the good of those who love him.',
+  },
+  {
+    reference: '1 Corinthians 16:14',
+    text: 'Do everything in love.',
+  },
+  {
+    reference: 'Psalm 46:1',
+    text: 'God is our refuge and strength, an ever-present help in trouble.',
+  },
+  {
+    reference: 'John 14:27',
+    text: 'Peace I leave with you; my peace I give you.',
+  },
+] as const;

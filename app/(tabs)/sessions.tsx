@@ -231,21 +231,6 @@ function getTimeOptions() {
   return options;
 }
 
-function formatMeetingDuration(minutes?: number) {
-  if (!minutes) {
-    return 'Less than 1 min';
-  }
-
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-
-  if (!hours) {
-    return `${minutes} min`;
-  }
-
-  return `${hours} hr${hours === 1 ? '' : 's'} ${remainingMinutes} min`;
-}
-
 function formatClockFromMs(totalMs: number) {
   const totalSeconds = Math.max(0, Math.floor(totalMs / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -307,24 +292,26 @@ function renderFormattedSummary(summary: string) {
   });
 }
 
-function getLiveMinutes(startedAt: string, now: number) {
-  return Math.max(1, Math.ceil((now - new Date(startedAt).getTime()) / 60000));
-}
-
 export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
-  const { addMeetingTranscriptSegment, clearMeetingTranscript, closeMeeting, correctMeetingTranscriptSpeaker, createMeetingGroup, createSession, currentUser, deleteSession, deleteSessionSummary, joinMeeting, leaveMeeting, meetingLogs, meetingTranscriptSegments, role, saveSessionSummary, sessionSummaries, sessions, startMeeting, users } = useAppRole();
+  const { addMeetingTranscriptSegment, attendanceRecords, clearMeetingTranscript, closeMeeting, correctMeetingTranscriptSpeaker, createMeetingGroup, createSession, currentUser, deleteSession, deleteSessionSummary, joinMeeting, leaveMeeting, meetingLogs, meetingTranscriptSegments, role, saveSessionSummary, sessionSummaries, sessions, startMeeting, users } = useAppRole();
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [location, setLocation] = useState('');
+  const [description, setDescription] = useState('');
+  const [sessionType, setSessionType] = useState('Fellowship');
   const [status, setStatus] = useState<SessionStatus>('upcoming');
   const [statusOpen, setStatusOpen] = useState(false);
+  const [typeOpen, setTypeOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [timeDraft, setTimeDraft] = useState(() => getSelectedTimeParts(''));
+  const [manualTime, setManualTime] = useState('');
+  const [timeError, setTimeError] = useState('');
   const [saving, setSaving] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<FellowshipSession | null>(null);
+  const [attendanceSession, setAttendanceSession] = useState<FellowshipSession | null>(null);
   const [sessionToInvite, setSessionToInvite] = useState<FellowshipSession | null>(null);
   const [resetConversationPending, setResetConversationPending] = useState(false);
   const [inviteGroupName, setInviteGroupName] = useState('');
@@ -359,18 +346,40 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
   const speakerOptionsRef = useRef<string[]>([]);
   const sortedSessions = useMemo(() => [...sessions], [sessions]);
   const sortedLogs = useMemo(() => [...(meetingLogs ?? [])], [meetingLogs]);
+  const meetingRoomSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    (meetingLogs ?? []).forEach((log) => ids.add(log.sessionId));
+    (meetingTranscriptSegments ?? []).forEach((segment) => ids.add(segment.sessionId));
+    (sessionSummaries ?? []).forEach((summary) => ids.add(summary.sessionId));
+    return ids;
+  }, [meetingLogs, meetingTranscriptSegments, sessionSummaries]);
+  const meetingRoomSessions = useMemo(() => (
+    sortedSessions.filter((session) => session.isMeetingRoom || meetingRoomSessionIds.has(session.id))
+  ), [meetingRoomSessionIds, sortedSessions]);
   const calendarDays = useMemo(() => getCalendarDays(calendarMonth), [calendarMonth]);
   const selectedDate = useMemo(() => parseSessionDate(date), [date]);
   const timeParts = useMemo(() => getUniqueTimeParts(), []);
   const inviteMembers = useMemo(() => (
     users.filter((user) => user.role === 'member' && user.id !== currentUser?.id)
   ), [currentUser?.id, users]);
-  const openCount = sessions.filter((session) => session.status === 'open').length;
-  const upcomingCount = sessions.filter((session) => session.status === 'upcoming').length;
-  const completedCount = sessions.filter((session) => session.status === 'completed').length;
-  const selectedRoomSession = sessions.find((session) => session.id === selectedRoomSessionId) ?? sessions[0];
+  const sessionTypeOptions = ['Fellowship', 'Bible Study', 'Prayer Meeting', 'Outreach', 'Camp', 'Worship Service', 'Youth Fellowship', 'Other'];
+  const churchSessions = sortedSessions.filter((session) => !session.isMeetingRoom && !meetingRoomSessionIds.has(session.id));
+  const sessionAttendanceRecords = attendanceSession
+    ? attendanceRecords.filter((record) => record.sessionId === attendanceSession.id)
+    : [];
+  const memberCount = users.filter((user) => user.role === 'member').length;
+  const attendancePresentCount = sessionAttendanceRecords.filter((record) => record.status === 'Present').length;
+  const attendanceAbsentCount = Math.max(memberCount - attendancePresentCount, 0);
+  const attendanceRate = memberCount ? Math.round((attendancePresentCount / memberCount) * 100) : 0;
+  const openCount = churchSessions.filter((session) => session.status === 'open').length;
+  const upcomingCount = churchSessions.filter((session) => session.status === 'upcoming').length;
+  const completedCount = churchSessions.filter((session) => session.status === 'completed').length;
+  const selectedRoomSession = meetingRoomSessions.find((session) => session.id === selectedRoomSessionId) ?? meetingRoomSessions[0];
   const selectedLiveLog = sortedLogs.find((log) => log.sessionId === selectedRoomSession?.id && log.status === 'live');
   const selectedLatestLog = selectedLiveLog ?? sortedLogs.find((log) => log.sessionId === selectedRoomSession?.id);
+  const selectedHostName = selectedRoomSession?.hostName ?? 'Unknown host';
+  const selectedHostId = selectedRoomSession?.hostId;
+  const selectedCanStartMeeting = Boolean(selectedRoomSession && currentUser && selectedHostId === currentUser.id);
   const selectedIsParticipant = Boolean(
     selectedLiveLog
     && currentUser
@@ -383,8 +392,8 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
     selectedLiveLog
     && currentUser
     && (
-      selectedRoomSession?.hostId
-        ? selectedRoomSession.hostId === currentUser.id
+      selectedHostId
+        ? selectedHostId === currentUser.id
         : selectedLiveLog.startedById === currentUser.id
     )
   );
@@ -392,7 +401,7 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
     selectedRoomSession
     && currentUser
     && (
-      selectedRoomSession.hostId === currentUser.id
+      selectedHostId === currentUser.id
       || selectedLiveLog?.startedById === currentUser.id
     )
   );
@@ -450,6 +459,16 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
   }, []);
 
   useEffect(() => {
+    if (!roomOnly || !meetingRoomSessions.length) {
+      return;
+    }
+
+    if (!meetingRoomSessions.some((session) => session.id === selectedRoomSessionId)) {
+      setSelectedRoomSessionId(meetingRoomSessions[0].id);
+    }
+  }, [meetingRoomSessions, roomOnly, selectedRoomSessionId]);
+
+  useEffect(() => {
     transcriptRef.current = meetingTranscript;
   }, [meetingTranscript]);
 
@@ -497,6 +516,8 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
     setDate('');
     setTime('');
     setLocation('');
+    setDescription('');
+    setSessionType('Fellowship');
     setStatus('upcoming');
   };
 
@@ -512,11 +533,20 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
       minute: parts.minute || '00',
       period: parts.period || 'PM',
     });
+    setManualTime(time);
+    setTimeError('');
     setTimeOpen(true);
   };
 
   const saveTimePicker = () => {
-    const nextTime = buildTime(timeDraft.hour, timeDraft.minute, timeDraft.period);
+    const typedTime = manualTime.trim().replace(/\s+/g, ' ').toUpperCase();
+    const nextTime = typedTime || buildTime(timeDraft.hour, timeDraft.minute, timeDraft.period);
+
+    if (!/^([1-9]|1[0-2]):[0-5][0-9]\s(AM|PM)$/.test(nextTime)) {
+      setTimeError('Use 12-hour format like 6:00 PM.');
+      return;
+    }
+
     setTime(nextTime);
     setTimeOpen(false);
   };
@@ -528,17 +558,21 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
       date: normalizeDate(date),
       time: time.trim(),
       location: location.trim(),
+      description: description.trim(),
+      sessionType,
+      leaderName: currentUser?.name,
+      isMeetingRoom: roomOnly,
       status,
     });
     setSaving(false);
 
     if (!result.ok) {
-      Alert.alert('Meeting not saved', result.message ?? 'Please check the meeting details.');
+      Alert.alert(roomOnly ? 'Meeting not saved' : 'Session not saved', result.message ?? 'Please check the details.');
       return;
     }
 
     resetForm();
-    Alert.alert('Meeting created', 'The meeting is now available in FellowshipHub.');
+    Alert.alert(roomOnly ? 'Meeting created' : 'Session created', roomOnly ? 'The meeting is now available in FellowshipHub.' : 'The session is now ready for attendance tracking.');
   };
 
   const confirmDelete = (session: FellowshipSession) => {
@@ -930,13 +964,11 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
   return (
     <AppShell
       activeKey={roomOnly ? 'meeting-room' : 'sessions'}
-      title={roomOnly ? 'Meeting Room' : role === 'admin' ? 'Sessions' : 'Meetings'}
+      title={roomOnly ? 'Meeting Room' : 'Sessions'}
       subtitle={
         roomOnly
           ? 'Start meetings, track participants, chat, capture notes, and summarize the discussion with AI.'
-          : role === 'admin'
-            ? 'Create, invite, and manage fellowship meetings.'
-            : 'Host meetings and invite members from your inbox.'
+          : 'Manage church gatherings, fellowship sessions, and attendance records.'
       }
     >
         <View style={styles.layout}>
@@ -1018,40 +1050,40 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                 <Card mode="outlined" style={styles.statCard}>
                   <Card.Content style={styles.statContent}>
                     <MaterialCommunityIcons name="calendar-clock" size={28} color="#111827" />
-                    <Text variant="headlineSmall" style={styles.statValue}>{sessions.length}</Text>
-                    <Text style={styles.statLabel}>Total meetings</Text>
+                    <Text variant="headlineSmall" style={styles.statValue}>{churchSessions.length}</Text>
+                    <Text style={styles.statLabel}>Total Sessions</Text>
                   </Card.Content>
                 </Card>
                 <Card mode="outlined" style={styles.statCard}>
                   <Card.Content style={styles.statContent}>
                     <MaterialCommunityIcons name="calendar-check" size={28} color="#111827" />
                     <Text variant="headlineSmall" style={styles.statValue}>{openCount}</Text>
-                    <Text style={styles.statLabel}>Open now</Text>
+                    <Text style={styles.statLabel}>Ongoing Sessions</Text>
                   </Card.Content>
                 </Card>
                 <Card mode="outlined" style={styles.statCard}>
                   <Card.Content style={styles.statContent}>
                     <MaterialCommunityIcons name="calendar-plus" size={28} color="#111827" />
                     <Text variant="headlineSmall" style={styles.statValue}>{upcomingCount}</Text>
-                    <Text style={styles.statLabel}>Upcoming</Text>
+                    <Text style={styles.statLabel}>Upcoming Sessions</Text>
                   </Card.Content>
                 </Card>
                 <Card mode="outlined" style={styles.statCard}>
                   <Card.Content style={styles.statContent}>
                     <MaterialCommunityIcons name="calendar-remove" size={28} color="#111827" />
                     <Text variant="headlineSmall" style={styles.statValue}>{completedCount}</Text>
-                    <Text style={styles.statLabel}>Completed</Text>
+                    <Text style={styles.statLabel}>Completed Sessions</Text>
                   </Card.Content>
                 </Card>
               </View>
 
               <Card mode="outlined" style={styles.formCard}>
                 <Card.Content>
-                  <Text variant="titleMedium" style={styles.sectionTitle}>Add Meeting</Text>
+                  <Text variant="titleMedium" style={styles.sectionTitle}>Add Session</Text>
                   <View style={styles.formGrid}>
                     <TextInput
                       left={<TextInput.Icon icon="clipboard-text-outline" />}
-                      label="Meeting Title"
+                      label="Session Title"
                       value={title}
                       onChangeText={setTitle}
                       mode="outlined"
@@ -1090,6 +1122,40 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                       theme={inputTheme}
                       textColor="#111827"
                     />
+                    <View style={styles.typePickerWrap}>
+                      <Menu
+                        visible={typeOpen}
+                        onDismiss={() => setTypeOpen(false)}
+                        anchor={
+                          <Button
+                            mode="outlined"
+                            textColor="#374151"
+                            icon="shape-outline"
+                            onPress={() => setTypeOpen(true)}
+                            style={styles.typePickerButton}
+                            contentStyle={styles.pickerButtonContent}
+                          >
+                            {sessionType}
+                          </Button>
+                        }
+                      >
+                        {sessionTypeOptions.map((option) => (
+                          <Menu.Item key={option} onPress={() => { setSessionType(option); setTypeOpen(false); }} title={option} />
+                        ))}
+                      </Menu>
+                    </View>
+                    <TextInput
+                      left={<TextInput.Icon icon="text-box-outline" />}
+                      label="Description optional"
+                      value={description}
+                      onChangeText={setDescription}
+                      mode="outlined"
+                      multiline
+                      placeholder="Purpose, notes, or reminders for this session"
+                      style={[styles.input, styles.descriptionInput]}
+                      theme={inputTheme}
+                      textColor="#111827"
+                    />
                   </View>
 
                   <View style={styles.formActions}>
@@ -1098,11 +1164,11 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                       onDismiss={() => setStatusOpen(false)}
                       anchor={
                         <Button mode="outlined" textColor="#111827" icon="chevron-down" onPress={() => setStatusOpen(true)}>
-                          {titleCaseStatus(status)}
+                          {status === 'open' ? 'Ongoing' : titleCaseStatus(status)}
                         </Button>
                       }
                     >
-                      <Menu.Item onPress={() => { setStatus('open'); setStatusOpen(false); }} title="Open" />
+                      <Menu.Item onPress={() => { setStatus('open'); setStatusOpen(false); }} title="Ongoing" />
                       <Menu.Item onPress={() => { setStatus('upcoming'); setStatusOpen(false); }} title="Upcoming" />
                       <Menu.Item onPress={() => { setStatus('completed'); setStatusOpen(false); }} title="Completed" />
                     </Menu>
@@ -1110,7 +1176,7 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                       Clear
                     </Button>
                     <Button mode="contained" textColor="#ffffff" icon="plus" onPress={submit} loading={saving} disabled={saving} style={styles.createButton}>
-                      Add Meeting
+                      Add Session
                     </Button>
                   </View>
                 </Card.Content>
@@ -1134,7 +1200,7 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                     <Text style={styles.teamsSidebarTitle}>Meetings</Text>
                   </View>
                   <ScrollView style={styles.meetingPicker} contentContainerStyle={styles.meetingPickerContent}>
-                    {sortedSessions.map((session) => {
+                    {meetingRoomSessions.map((session) => {
                       const active = session.id === selectedRoomSession?.id;
                       const liveLog = sortedLogs.find((log) => log.sessionId === session.id && log.status === 'live');
                       const canManageSession = role === 'admin' || session.hostId === currentUser?.id;
@@ -1151,6 +1217,12 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                           >
                             {session.title}
                           </Button>
+                          <View style={styles.meetingHostRow}>
+                            <MaterialCommunityIcons name="account-star-outline" size={13} color={active ? '#d1d5db' : '#6b7280'} />
+                            <Text style={[styles.meetingHostText, { color: active ? '#d1d5db' : '#6b7280' }]}>
+                              Created by {session.hostName ?? 'Unknown host'}
+                            </Text>
+                          </View>
                           <View style={styles.meetingRoomItemActions}>
                             <Button compact mode="text" textColor={active ? '#ffffff' : '#111827'} icon="email-outline" onPress={() => openInviteModal(session)}>
                               Invite
@@ -1175,6 +1247,10 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                           <Text style={styles.teamsEyebrow}>{selectedLiveLog ? 'LIVE NOW' : 'MEETING ROOM'}</Text>
                           <Text style={styles.teamsTitle}>{selectedRoomSession.title}</Text>
                           <Text style={styles.teamsMeta}>{selectedRoomSession.date} at {selectedRoomSession.time} - {selectedRoomSession.location}</Text>
+                          <View style={styles.hostLine}>
+                            <MaterialCommunityIcons name="account-star-outline" size={14} color="#d1d5db" />
+                            <Text style={styles.hostLineText}>Host: {selectedHostName}</Text>
+                          </View>
                         </View>
                         <View style={[styles.liveBadge, selectedLiveLog ? styles.liveBadgeActive : styles.teamsBadgeIdle]}>
                           <MaterialCommunityIcons name={selectedLiveLog ? 'record-circle-outline' : 'timer-outline'} size={18} color={selectedLiveLog ? '#ffffff' : '#111827'} />
@@ -1199,12 +1275,18 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                       <View style={styles.teamsParticipantStrip}>
                         {selectedLatestLog?.participantNames.length ? selectedLatestLog.participantNames.map((name, index) => {
                           const participantActive = normalizeSpeakerLabel(name) === normalizeSpeakerLabel(activeSpeakerName);
+                          const participantId = selectedLatestLog.participantIds[index];
+                          const participantIsHost = Boolean(
+                            (selectedHostId && participantId === selectedHostId)
+                            || normalizeSpeakerLabel(name) === normalizeSpeakerLabel(selectedHostName)
+                          );
                           return (
                           <View key={`${name}-${index}`} style={[styles.teamsParticipantTile, participantActive && styles.teamsParticipantTileActive]}>
                             <View style={styles.teamsMiniAvatar}>
                               <Text style={styles.teamsMiniInitials}>{name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</Text>
                             </View>
                             <Text style={styles.teamsParticipantName}>{name}</Text>
+                            {participantIsHost ? <Text style={styles.hostBadge}>Host</Text> : null}
                             {participantActive ? <Text style={styles.activeSpeakerPill}>Speaking</Text> : null}
                           </View>
                         );
@@ -1216,47 +1298,61 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                       <View style={styles.teamsControls}>
                         {selectedLiveLog ? (
                           <>
-                            <Button mode="contained-tonal" textColor="#111827" icon={selectedIsParticipant ? 'check-circle-outline' : 'account-plus-outline'} disabled={selectedIsParticipant} onPress={() => handleJoinMeeting(selectedRoomSession.id)} style={styles.teamsControlButton}>
-                              {selectedIsParticipant ? 'Joined' : 'Join'}
-                            </Button>
-                            <Button mode="contained-tonal" textColor="#111827" icon="message-text-outline" onPress={() => setMeetingChatOpen(true)} style={styles.teamsControlButton}>
-                              Chat
-                            </Button>
-                            {listening ? (
-                              <Button mode="contained-tonal" buttonColor="#e5e7eb" textColor="#111827" icon="microphone-off" onPress={stopListening} style={styles.teamsControlButton}>
-                                Stop AI
+                            <View style={styles.teamsPrimaryControls}>
+                              {!selectedIsParticipant ? (
+                                <Button mode="contained-tonal" textColor="#111827" icon="account-plus-outline" onPress={() => handleJoinMeeting(selectedRoomSession.id)} style={styles.teamsControlButton}>
+                                  Join
+                                </Button>
+                              ) : null}
+                              <Button mode="contained-tonal" textColor="#111827" icon="message-text-outline" onPress={() => setMeetingChatOpen(true)} style={styles.teamsControlButton}>
+                                Chat
                               </Button>
-                            ) : (
-                              <Button mode="contained-tonal" textColor="#111827" icon="microphone" disabled={!canUseSpeakingControls} onPress={startListening} style={styles.teamsControlButton}>
-                                AI Listen
+                              {listening ? (
+                                <Button mode="contained-tonal" buttonColor="#e5e7eb" textColor="#111827" icon="microphone-off" onPress={stopListening} style={styles.teamsControlButton}>
+                                  Stop AI
+                                </Button>
+                              ) : (
+                                <Button mode="contained-tonal" textColor="#111827" icon="microphone" disabled={!canUseSpeakingControls} onPress={startListening} style={styles.teamsControlButton}>
+                                  AI Listen
+                                </Button>
+                              )}
+                              <Button mode="contained-tonal" textColor="#111827" icon="auto-fix" onPress={() => setMeetingAiOpen(true)} style={styles.teamsControlButton}>
+                                AI Summary
                               </Button>
-                            )}
-                            <Button mode="contained-tonal" textColor="#111827" icon="auto-fix" onPress={() => setMeetingAiOpen(true)} style={styles.teamsControlButton}>
-                              AI Summary
-                            </Button>
-                            {selectedIsParticipant ? (
-                              <Button mode="contained" textColor="#ffffff" buttonColor="#b91c1c" icon="phone-hangup" onPress={() => handleLeaveMeeting(selectedRoomSession.id)} style={styles.teamsEndButton}>
-                                Leave
-                              </Button>
-                            ) : null}
-                            {selectedCanEndMeeting ? (
-                              <Button mode="contained" textColor="#ffffff" buttonColor="#7f1d1d" icon="stop-circle-outline" onPress={() => handleCloseMeeting(selectedRoomSession.id)} style={styles.teamsEndButton}>
-                                End Meeting
-                              </Button>
+                            </View>
+                            {selectedIsParticipant || selectedCanEndMeeting ? (
+                              <View style={styles.teamsDangerControls}>
+                                {selectedIsParticipant ? (
+                                  <Button mode="contained" textColor="#ffffff" buttonColor="#dc2626" icon="phone-hangup" onPress={() => handleLeaveMeeting(selectedRoomSession.id)} style={styles.teamsEndButton}>
+                                    Leave
+                                  </Button>
+                                ) : null}
+                                {selectedCanEndMeeting ? (
+                                  <Button mode="contained" textColor="#ffffff" buttonColor="#7f1d1d" icon="stop-circle-outline" onPress={() => handleCloseMeeting(selectedRoomSession.id)} style={styles.teamsEndButton}>
+                                    End Meeting
+                                  </Button>
+                                ) : null}
+                              </View>
                             ) : null}
                           </>
                         ) : (
-                          <>
+                          <View style={styles.teamsPrimaryControls}>
                             <Button mode="contained-tonal" textColor="#111827" icon="message-text-outline" onPress={() => setMeetingChatOpen(true)} style={styles.teamsControlButton}>
                               Chat
                             </Button>
                             <Button mode="contained-tonal" textColor="#111827" icon="auto-fix" onPress={() => setMeetingAiOpen(true)} style={styles.teamsControlButton}>
                               AI Summary
                             </Button>
-                            <Button mode="contained" textColor="#ffffff" icon="video-outline" onPress={() => handleStartMeeting(selectedRoomSession.id)} style={styles.teamsStartButton}>
-                              Start Meeting
-                            </Button>
-                          </>
+                            {selectedCanStartMeeting ? (
+                              <Button mode="contained" textColor="#ffffff" icon="video-outline" onPress={() => handleStartMeeting(selectedRoomSession.id)} style={styles.teamsStartButton}>
+                                Start Meeting
+                              </Button>
+                            ) : (
+                              <Button mode="outlined" textColor="#d1d5db" icon="lock-outline" disabled style={styles.teamsLockedButton}>
+                                Creator only
+                              </Button>
+                            )}
+                          </View>
                         )}
                       </View>
                     </View>
@@ -1272,28 +1368,36 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
           {!roomOnly ? (
             <Card mode="outlined" style={styles.tableCard}>
             <Card.Content>
-              <Text variant="titleMedium" style={styles.sectionTitle}>Meeting List</Text>
+              <Text variant="titleMedium" style={styles.sectionTitle}>Session List</Text>
               <DataTable>
                 <DataTable.Header>
-                  <DataTable.Title>Meeting</DataTable.Title>
-                  <DataTable.Title>Date</DataTable.Title>
-                  <DataTable.Title>Time</DataTable.Title>
-                  <DataTable.Title>Location</DataTable.Title>
-                  <DataTable.Title>Status</DataTable.Title>
-                  <DataTable.Title>Action</DataTable.Title>
+                  <DataTable.Title style={styles.sessionTitleColumn}>Session</DataTable.Title>
+                  <DataTable.Title style={styles.dateColumn}>Date</DataTable.Title>
+                  <DataTable.Title style={styles.timeColumnTable}>Time</DataTable.Title>
+                  <DataTable.Title style={styles.typeColumn}>Type</DataTable.Title>
+                  <DataTable.Title style={styles.locationColumn}>Location</DataTable.Title>
+                  <DataTable.Title style={styles.statusColumn}>Status</DataTable.Title>
+                  <DataTable.Title style={styles.actionColumn}>Action</DataTable.Title>
                 </DataTable.Header>
-                {sortedSessions.map((session) => (
+                {churchSessions.map((session) => (
                   <DataTable.Row key={session.id}>
-                    <DataTable.Cell>{session.title}</DataTable.Cell>
-                    <DataTable.Cell>{session.date}</DataTable.Cell>
-                    <DataTable.Cell>{session.time}</DataTable.Cell>
-                    <DataTable.Cell>{session.location}</DataTable.Cell>
-                    <DataTable.Cell>{titleCaseStatus(session.status)}</DataTable.Cell>
-                    <DataTable.Cell>
+                    <DataTable.Cell style={styles.sessionTitleColumn}>
+                      <View>
+                        <Text style={styles.tableMeetingTitle}>{session.title}</Text>
+                        <Text style={styles.tableMeetingHost}>Created by {session.hostName ?? 'Unknown creator'}</Text>
+                        {session.description ? <Text style={styles.tableMeetingHost}>{session.description}</Text> : null}
+                      </View>
+                    </DataTable.Cell>
+                    <DataTable.Cell style={styles.dateColumn}>{session.date}</DataTable.Cell>
+                    <DataTable.Cell style={styles.timeColumnTable}>{session.time}</DataTable.Cell>
+                    <DataTable.Cell style={styles.typeColumn}>{session.sessionType ?? 'Fellowship'}</DataTable.Cell>
+                    <DataTable.Cell style={styles.locationColumn}>{session.location}</DataTable.Cell>
+                    <DataTable.Cell style={styles.statusColumn}>{session.status === 'open' ? 'Ongoing' : titleCaseStatus(session.status)}</DataTable.Cell>
+                    <DataTable.Cell style={styles.actionColumn}>
                       {role === 'admin' || session.hostId === currentUser?.id ? (
                         <View style={styles.tableActions}>
-                          <Button compact mode="text" textColor="#111827" icon="email-outline" onPress={() => openInviteModal(session)}>
-                            Invite
+                          <Button compact mode="text" textColor="#111827" icon="account-check-outline" onPress={() => setAttendanceSession(session)}>
+                            View Attendance
                           </Button>
                           <Button compact mode="text" textColor="#b91c1c" icon="delete-outline" onPress={() => confirmDelete(session)}>
                             Delete
@@ -1313,38 +1417,75 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
           {!roomOnly ? (
             <Card mode="outlined" style={styles.tableCard}>
             <Card.Content>
-              <Text variant="titleMedium" style={styles.sectionTitle}>Meeting Time Logs</Text>
-              {sortedLogs.length ? (
-                <DataTable>
-                  <DataTable.Header>
-                    <DataTable.Title>Meeting</DataTable.Title>
-                    <DataTable.Title>Started By</DataTable.Title>
-                    <DataTable.Title>Duration</DataTable.Title>
-                    <DataTable.Title numeric>Participants</DataTable.Title>
-                    <DataTable.Title>Names</DataTable.Title>
-                  </DataTable.Header>
-                  {sortedLogs.map((log) => (
-                    <DataTable.Row key={log.id}>
-                      <DataTable.Cell>{log.sessionTitle}</DataTable.Cell>
-                      <DataTable.Cell>{log.startedByName}</DataTable.Cell>
-                      <DataTable.Cell>
-                        {log.status === 'live'
-                          ? `${formatMeetingDuration(getLiveMinutes(log.startedAt, clockNow))} live`
-                          : formatMeetingDuration(log.durationMinutes)}
-                      </DataTable.Cell>
-                      <DataTable.Cell numeric>{log.participantIds.length}</DataTable.Cell>
-                      <DataTable.Cell>{log.participantNames.join(', ') || '-'}</DataTable.Cell>
-                    </DataTable.Row>
-                  ))}
-                </DataTable>
-              ) : (
-                <Text style={styles.emptyLog}>No meeting time logs yet. Start and close a meeting to create one.</Text>
-              )}
+              <Text variant="titleMedium" style={styles.sectionTitle}>Session Attendance Summary</Text>
+              <Text style={styles.emptyLog}>Use View Attendance in the Session List to review attendees, absences, and attendance rate for each church session.</Text>
             </Card.Content>
           </Card>
           ) : null}
 
           <Portal>
+            <Modal
+              visible={Boolean(attendanceSession)}
+              onDismiss={() => setAttendanceSession(null)}
+              contentContainerStyle={styles.modalWrap}
+            >
+              <Card mode="outlined" style={styles.attendanceModalCard}>
+                <Card.Content style={styles.attendanceModalContent}>
+                  <View style={styles.teamsPanelHeader}>
+                    <View>
+                      <Text style={styles.meetingToolTitle}>{attendanceSession?.title ?? 'Session'} Attendance</Text>
+                      <Text style={styles.meetingToolSubtitle}>
+                        {attendanceSession ? `${attendanceSession.date} at ${attendanceSession.time} - ${attendanceSession.location}` : ''}
+                      </Text>
+                    </View>
+                    <Button compact mode="outlined" textColor="#111827" onPress={() => setAttendanceSession(null)}>
+                      Close
+                    </Button>
+                  </View>
+                  <View style={styles.attendanceStatsGrid}>
+                    <View style={styles.attendanceStatBox}>
+                      <Text style={styles.attendanceStatValue}>{memberCount}</Text>
+                      <Text style={styles.attendanceStatLabel}>Total Attendees</Text>
+                    </View>
+                    <View style={styles.attendanceStatBox}>
+                      <Text style={styles.attendanceStatValue}>{attendancePresentCount}</Text>
+                      <Text style={styles.attendanceStatLabel}>Present</Text>
+                    </View>
+                    <View style={styles.attendanceStatBox}>
+                      <Text style={styles.attendanceStatValue}>{attendanceAbsentCount}</Text>
+                      <Text style={styles.attendanceStatLabel}>Absent</Text>
+                    </View>
+                    <View style={styles.attendanceStatBox}>
+                      <Text style={styles.attendanceStatValue}>{attendanceRate}%</Text>
+                      <Text style={styles.attendanceStatLabel}>Attendance Rate</Text>
+                    </View>
+                  </View>
+                  <DataTable>
+                    <DataTable.Header>
+                      <DataTable.Title>Member</DataTable.Title>
+                      <DataTable.Title>Status</DataTable.Title>
+                      <DataTable.Title>Checked In</DataTable.Title>
+                    </DataTable.Header>
+                    {users.filter((user) => user.role === 'member').map((member) => {
+                      const record = sessionAttendanceRecords.find((candidate) => candidate.userId === member.id);
+
+                      return (
+                        <DataTable.Row key={member.id}>
+                          <DataTable.Cell>{member.name}</DataTable.Cell>
+                          <DataTable.Cell>{record?.status ?? 'Absent'}</DataTable.Cell>
+                          <DataTable.Cell>
+                            {record?.checkedInAt
+                              ? new Date(record.checkedInAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                              : '-'}
+                          </DataTable.Cell>
+                        </DataTable.Row>
+                      );
+                    })}
+                  </DataTable>
+                </Card.Content>
+              </Card>
+            </Modal>
+
             <Modal
               visible={meetingChatOpen}
               onDismiss={() => setMeetingChatOpen(false)}
@@ -1680,6 +1821,21 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                     <MaterialCommunityIcons name="clock-outline" size={24} color="#111827" />
                     <Text style={styles.timePreviewText}>{buildTime(timeDraft.hour, timeDraft.minute, timeDraft.period) || 'Choose a time'}</Text>
                   </View>
+                  <TextInput
+                    label="Type time"
+                    value={manualTime}
+                    onChangeText={(value) => {
+                      setManualTime(value);
+                      setTimeError('');
+                    }}
+                    mode="outlined"
+                    placeholder="6:00 PM"
+                    style={styles.manualTimeInput}
+                    theme={inputTheme}
+                    textColor="#111827"
+                    error={Boolean(timeError)}
+                  />
+                  {timeError ? <Text style={styles.timeError}>{timeError}</Text> : <Text style={styles.timeHelp}>Use 12-hour format, or choose from the quick picker below.</Text>}
                   <View style={styles.timeColumns}>
                     <ScrollView style={styles.timeColumn}>
                       {timeParts.hours.map((hour) => (
@@ -1688,7 +1844,12 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                           mode={timeDraft.hour === hour ? 'contained' : 'text'}
                           textColor={timeDraft.hour === hour ? '#ffffff' : '#111827'}
                           style={styles.timeOption}
-                          onPress={() => setTimeDraft((current) => ({ ...current, hour }))}
+                          onPress={() => {
+                            const nextDraft = { ...timeDraft, hour };
+                            setTimeDraft(nextDraft);
+                            setManualTime(buildTime(nextDraft.hour, nextDraft.minute, nextDraft.period));
+                            setTimeError('');
+                          }}
                         >
                           {hour}
                         </Button>
@@ -1701,7 +1862,12 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                           mode={timeDraft.minute === minute ? 'contained' : 'text'}
                           textColor={timeDraft.minute === minute ? '#ffffff' : '#111827'}
                           style={styles.timeOption}
-                          onPress={() => setTimeDraft((current) => ({ ...current, minute }))}
+                          onPress={() => {
+                            const nextDraft = { ...timeDraft, minute };
+                            setTimeDraft(nextDraft);
+                            setManualTime(buildTime(nextDraft.hour, nextDraft.minute, nextDraft.period));
+                            setTimeError('');
+                          }}
                         >
                           {minute}
                         </Button>
@@ -1714,7 +1880,12 @@ export function SessionsScreen({ roomOnly = false }: { roomOnly?: boolean }) {
                           mode={timeDraft.period === period ? 'contained' : 'outlined'}
                           textColor={timeDraft.period === period ? '#ffffff' : '#111827'}
                           style={styles.timeOption}
-                          onPress={() => setTimeDraft((current) => ({ ...current, period }))}
+                          onPress={() => {
+                            const nextDraft = { ...timeDraft, period };
+                            setTimeDraft(nextDraft);
+                            setManualTime(buildTime(nextDraft.hour, nextDraft.minute, nextDraft.period));
+                            setTimeError('');
+                          }}
                         >
                           {period}
                         </Button>
@@ -1875,8 +2046,9 @@ const styles = StyleSheet.create({
   layout: { gap: 16 },
   statsGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
   statCard: {
-    flexBasis: 160,
+    flexBasis: 140,
     flexGrow: 1,
+    minWidth: 0,
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
   },
@@ -1886,10 +2058,20 @@ const styles = StyleSheet.create({
   formCard: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
   sectionTitle: { color: '#111827', fontWeight: '900', marginBottom: 14 },
   formGrid: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12 },
-  input: { flexBasis: 240, flexGrow: 1, minHeight: 50, backgroundColor: '#ffffff' },
+  input: { flexBasis: 220, flexGrow: 1, minWidth: 0, minHeight: 50, backgroundColor: '#ffffff' },
+  descriptionInput: { flexBasis: 460, minHeight: 74 },
+  typePickerWrap: { flexBasis: 220, flexGrow: 1, minWidth: 0 },
+  typePickerButton: {
+    minHeight: 50,
+    justifyContent: 'center',
+    borderColor: '#6b7280',
+    borderRadius: 4,
+    alignSelf: 'stretch',
+  },
   pickerButton: {
-    flexBasis: 240,
+    flexBasis: 220,
     flexGrow: 1,
+    minWidth: 0,
     minHeight: 50,
     justifyContent: 'center',
     borderColor: '#6b7280',
@@ -1902,7 +2084,31 @@ const styles = StyleSheet.create({
   formActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 14 },
   createButton: { backgroundColor: '#111827' },
   tableCard: { backgroundColor: '#ffffff', borderColor: '#e5e7eb' },
+  tableMeetingTitle: { color: '#111827', fontWeight: '800' },
+  tableMeetingHost: { color: '#6b7280', fontSize: 11, fontWeight: '700', marginTop: 2 },
   tableActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 },
+  sessionTitleColumn: { flex: 2.2, minWidth: 150 },
+  dateColumn: { flex: 1.35, minWidth: 130 },
+  timeColumnTable: { flex: 0.9, minWidth: 82 },
+  typeColumn: { flex: 1.1, minWidth: 110 },
+  locationColumn: { flex: 1.2, minWidth: 110 },
+  statusColumn: { flex: 0.95, minWidth: 95 },
+  actionColumn: { flex: 1.65, minWidth: 170 },
+  attendanceModalCard: { width: '92%', maxWidth: 760, maxHeight: '90%', alignSelf: 'center', backgroundColor: '#ffffff' },
+  attendanceModalContent: { gap: 14 },
+  attendanceStatsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  attendanceStatBox: {
+    flexBasis: 130,
+    flexGrow: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    padding: 14,
+    backgroundColor: '#f9fafb',
+  },
+  attendanceStatValue: { color: '#111827', fontSize: 24, fontWeight: '900', textAlign: 'center' },
+  attendanceStatLabel: { color: '#374151', fontSize: 12, fontWeight: '800', textAlign: 'center', marginTop: 4 },
   sectionHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1918,8 +2124,9 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   teamsSidebar: {
-    flexBasis: 230,
+    flexBasis: 220,
     flexGrow: 1,
+    minWidth: 0,
     maxHeight: 620,
     borderWidth: 1,
     borderColor: '#e5e7eb',
@@ -1936,22 +2143,25 @@ const styles = StyleSheet.create({
   },
   teamsSidebarTitle: { color: '#111827', fontWeight: '900', fontSize: 15 },
   teamsMain: {
-    flexBasis: 720,
+    flexBasis: 340,
     flexGrow: 4,
+    minWidth: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 14,
   },
   teamsCallArea: {
-    flexBasis: 460,
+    flexBasis: 320,
     flexGrow: 3,
+    minWidth: 0,
     borderRadius: 14,
     backgroundColor: '#202124',
-    padding: 14,
-    gap: 12,
+    padding: 16,
+    gap: 14,
   },
   teamsTopBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
@@ -1959,9 +2169,11 @@ const styles = StyleSheet.create({
   teamsEyebrow: { color: '#a7f3d0', fontSize: 12, fontWeight: '900', letterSpacing: 0 },
   teamsTitle: { color: '#ffffff', fontSize: 24, fontWeight: '900', marginTop: 4 },
   teamsMeta: { color: '#d1d5db', marginTop: 4 },
+  hostLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' },
+  hostLineText: { color: '#d1d5db', fontSize: 12, fontWeight: '800' },
   teamsBadgeIdle: { backgroundColor: '#e5e7eb' },
   teamsStage: {
-    minHeight: 280,
+    minHeight: 230,
     borderRadius: 14,
     backgroundColor: '#2f3136',
     alignItems: 'center',
@@ -1970,24 +2182,26 @@ const styles = StyleSheet.create({
   },
   speakerTile: { alignItems: 'center', gap: 10 },
   speakerAvatar: {
-    width: 116,
-    height: 116,
-    borderRadius: 58,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  speakerInitials: { color: '#ffffff', fontSize: 36, fontWeight: '900' },
-  speakerName: { color: '#ffffff', fontSize: 20, fontWeight: '900' },
+  speakerInitials: { color: '#ffffff', fontSize: 32, fontWeight: '900' },
+  speakerName: { color: '#ffffff', fontSize: 18, fontWeight: '900', textAlign: 'center' },
   speakerStatus: { color: '#d1d5db', textAlign: 'center' },
   teamsParticipantStrip: {
-    minHeight: 88,
+    minHeight: 74,
     flexDirection: 'row',
     flexWrap: 'wrap',
+    alignItems: 'stretch',
     gap: 8,
   },
   teamsParticipantTile: {
-    width: 112,
+    width: 118,
+    minHeight: 72,
     borderRadius: 10,
     backgroundColor: '#111827',
     padding: 8,
@@ -2008,6 +2222,11 @@ const styles = StyleSheet.create({
   },
   teamsMiniInitials: { color: '#ffffff', fontWeight: '900' },
   teamsParticipantName: { color: '#ffffff', fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  hostBadge: {
+    color: '#fde68a',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   activeSpeakerPill: {
     color: '#bbf7d0',
     fontSize: 10,
@@ -2020,24 +2239,42 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     flex: 1,
+    textAlign: 'center',
   },
   teamsControls: {
-    minHeight: 58,
-    borderRadius: 999,
+    minHeight: 74,
+    borderRadius: 24,
     backgroundColor: '#111827',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+  },
+  teamsPrimaryControls: {
+    width: '100%',
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
-    padding: 10,
+    gap: 12,
   },
-  teamsControlButton: { borderRadius: 999 },
-  teamsStartButton: { backgroundColor: '#111827', borderRadius: 999 },
-  teamsEndButton: { borderRadius: 999 },
+  teamsDangerControls: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  teamsControlButton: { borderRadius: 999, minWidth: 132 },
+  teamsStartButton: { backgroundColor: '#111827', borderRadius: 999, minWidth: 156 },
+  teamsEndButton: { borderRadius: 999, minWidth: 140 },
+  teamsLockedButton: { borderRadius: 999, minWidth: 156, borderColor: '#4b5563' },
   teamsSidePanel: {
-    flexBasis: 300,
+    flexBasis: 280,
     flexGrow: 2,
+    minWidth: 0,
     gap: 12,
   },
   teamsPanelSection: {
@@ -2195,6 +2432,7 @@ const styles = StyleSheet.create({
   meetingPicker: {
     flexBasis: 220,
     flexGrow: 1,
+    minWidth: 0,
     maxHeight: 360,
   },
   meetingPickerContent: { gap: 8 },
@@ -2223,6 +2461,14 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     borderRadius: 6,
   },
+  meetingHostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingBottom: 4,
+  },
+  meetingHostText: { flex: 1, fontSize: 11, fontWeight: '700' },
   meetingRoomItemActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2231,8 +2477,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   roomStage: {
-    flexBasis: 520,
+    flexBasis: 320,
     flexGrow: 4,
+    minWidth: 0,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     borderRadius: 12,
@@ -2242,6 +2489,7 @@ const styles = StyleSheet.create({
   },
   roomHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
@@ -2267,7 +2515,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timerLabel: { color: '#cbd5e1', fontWeight: '800' },
-  timerValue: { color: '#ffffff', fontSize: 48, fontWeight: '900', marginVertical: 4 },
+  timerValue: { color: '#ffffff', fontSize: 36, fontWeight: '900', marginVertical: 4, textAlign: 'center' },
   timerSubtext: { color: '#e5e7eb', textAlign: 'center' },
   participantsPanel: {
     borderWidth: 1,
@@ -2277,7 +2525,7 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 10,
   },
-  participantHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  participantHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   participantsTitle: { color: '#111827', fontWeight: '900' },
   participantsCount: { color: '#111827', fontWeight: '900' },
   participantChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -2456,6 +2704,9 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   timePreviewText: { color: '#111827', fontSize: 22, fontWeight: '900' },
+  manualTimeInput: { backgroundColor: '#ffffff', marginBottom: 4 },
+  timeHelp: { color: '#6b7280', fontSize: 12, fontWeight: '700', marginBottom: 12 },
+  timeError: { color: '#b91c1c', fontSize: 12, fontWeight: '800', marginBottom: 12 },
   timeColumns: { flexDirection: 'row', gap: 10 },
   timeColumn: {
     flex: 1,

@@ -15,7 +15,6 @@ type ShellItem = {
 const memberItems: ShellItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: 'view-dashboard', route: '/(tabs)/dashboard' },
   { key: 'attendance', label: 'Attendance', icon: 'calendar-check', route: '/(tabs)/attendance' },
-  { key: 'history', label: 'History', icon: 'history', route: '/(tabs)/history' },
   { key: 'sessions', label: 'Meetings', icon: 'clipboard-list-outline', route: '/(tabs)/sessions' },
   { key: 'meeting-room', label: 'Meeting Room', icon: 'video-outline', route: '/(tabs)/meeting-room' },
   { key: 'inbox', label: 'Inbox', icon: 'email-outline', route: '/(tabs)/inbox' },
@@ -135,6 +134,10 @@ export function AppShell({
     router.replace('/login');
   };
 
+  const goHome = () => {
+    router.push('/(tabs)/dashboard' as never);
+  };
+
   if (loading || !currentUser) {
     return (
       <View style={[styles.loadingScreen, { backgroundColor: shellColors.page }]}>
@@ -147,10 +150,10 @@ export function AppShell({
     <View style={[styles.shell, { backgroundColor: shellColors.page }, !desktop && styles.mobileShell]}>
       {desktop ? (
         <View style={[styles.sidebar, { backgroundColor: shellColors.panel, borderRightColor: shellColors.border }]}>
-          <View style={styles.brandRow}>
+          <Pressable style={styles.brandRow} onPress={goHome} accessibilityRole="button" accessibilityLabel="Go to dashboard">
             <MaterialCommunityIcons name="cross" size={22} color={shellColors.text} />
             <Text style={[styles.brandText, { color: shellColors.text }]}>FellowshipHub</Text>
-          </View>
+          </Pressable>
           <View style={styles.sideNav}>
             {items.map((item) => {
               const active = item.key === activeKey;
@@ -173,10 +176,10 @@ export function AppShell({
 
       <View style={styles.main}>
         <View style={[styles.topbar, { backgroundColor: shellColors.panel, borderBottomColor: shellColors.border }]}>
-          <View style={styles.topbarLeft}>
+          <Pressable style={styles.topbarLeft} onPress={goHome} accessibilityRole="button" accessibilityLabel="Go to dashboard">
             <MaterialCommunityIcons name="cross" size={22} color={shellColors.text} />
             <Text style={[styles.brandText, { color: shellColors.text }]}>FellowshipHub</Text>
-          </View>
+          </Pressable>
           {desktop ? (
             <IconButton
               icon="menu"
@@ -194,7 +197,10 @@ export function AppShell({
           </View>
         </View>
 
-        <ScrollView style={styles.contentScroll} contentContainerStyle={styles.content}>
+        <ScrollView
+          style={styles.contentScroll}
+          contentContainerStyle={[styles.content, !desktop && styles.mobileContent, width < 520 && styles.phoneContent]}
+        >
           <Animated.View style={[styles.contentMotion, { opacity: contentOpacity, transform: [{ translateY: contentTranslate }] }]}>
             <View style={styles.headerBlock}>
               <Text variant="headlineSmall" style={[styles.pageTitle, { color: shellColors.text }]}>{title}</Text>
@@ -303,11 +309,13 @@ const styles = StyleSheet.create({
   topbarRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   avatar: { backgroundColor: '#1f2937' },
   darkAvatar: { backgroundColor: '#334155' },
-  identity: { marginLeft: 2, maxWidth: 120 },
+  identity: { marginLeft: 2, maxWidth: 120, minWidth: 0 },
   identityName: { fontSize: 12, fontWeight: '700', color: '#111827' },
   identityRole: { fontSize: 11, color: '#374151', fontWeight: '600' },
   contentScroll: { flex: 1 },
   content: { padding: 24, paddingBottom: 32, maxWidth: 1180, width: '100%', alignSelf: 'center' },
+  mobileContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 88 },
+  phoneContent: { paddingHorizontal: 12, paddingTop: 14 },
   contentMotion: { width: '100%' },
   headerBlock: { marginBottom: 18 },
   pageTitle: { fontWeight: '800', color: '#111827' },

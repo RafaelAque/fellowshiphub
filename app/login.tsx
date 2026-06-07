@@ -244,7 +244,7 @@ export default function Login() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Animated.View style={{ width: '100%', maxWidth: 420, opacity: cardOpacity, transform: [{ translateY: cardTranslate }] }}>
-      <Card mode="outlined" style={styles.card}>
+        <Card mode="outlined" style={styles.card}>
         <Card.Content style={styles.content}>
           <View style={styles.brandMark}>
             <MaterialCommunityIcons name="cross" size={36} color="#111827" />

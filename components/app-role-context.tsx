@@ -29,6 +29,10 @@ export type FellowshipSession = {
   time: string;
   location: string;
   status: 'open' | 'upcoming' | 'completed';
+  description?: string;
+  sessionType?: string;
+  leaderName?: string;
+  isMeetingRoom?: boolean;
   hostId?: string;
   hostName?: string;
 };
@@ -138,6 +142,21 @@ export type MeetingTranscriptSegment = {
   createdAt: string;
 };
 
+export type AnnouncementPriority = 'Normal' | 'Important' | 'Urgent';
+
+export type Announcement = {
+  id: string;
+  title: string;
+  content: string;
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  priority: AnnouncementPriority;
+  pinned: boolean;
+  archived?: boolean;
+};
+
 type DemoData = {
   users: DemoUser[];
   sessions: FellowshipSession[];
@@ -150,6 +169,7 @@ type DemoData = {
   meetingInvites: MeetingInvite[];
   groupChatMessages: GroupChatMessage[];
   meetingLogs: MeetingLog[];
+  announcements: Announcement[];
 };
 
 type PersistedState = {
@@ -219,6 +239,10 @@ type AppRoleContextValue = {
   joinMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string }>;
   leaveMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string; closed?: boolean }>;
   closeMeeting: (sessionId: string) => Promise<{ ok: boolean; message?: string }>;
+  announcements: Announcement[];
+  createAnnouncement: (input: { title: string; content: string; priority: AnnouncementPriority; pinned: boolean }) => Promise<{ ok: boolean; message?: string }>;
+  updateAnnouncement: (announcementId: string, input: { title: string; content: string; priority: AnnouncementPriority; pinned: boolean; archived?: boolean }) => Promise<{ ok: boolean; message?: string }>;
+  deleteAnnouncement: (announcementId: string) => Promise<{ ok: boolean; message?: string }>;
 };
 
 const STORE_KEY = 'fellowshiphub-store-v3';
@@ -260,6 +284,19 @@ const seedData: DemoData = {
   meetingInvites: [],
   groupChatMessages: [],
   meetingLogs: [],
+  announcements: [
+    {
+      id: 'announcement-welcome',
+      title: 'Welcome to FellowshipHub',
+      content: 'Stay connected here for church updates, fellowship reminders, and important announcements from the team.',
+      createdById: 'admin-albinaurics',
+      createdByName: 'Albinaurics Admin',
+      createdAt: '2026-06-01T08:00:00.000Z',
+      updatedAt: '2026-06-01T08:00:00.000Z',
+      priority: 'Important',
+      pinned: true,
+    },
+  ],
 };
 
 const AppRoleContext = createContext<AppRoleContextValue | undefined>(undefined);
@@ -360,6 +397,7 @@ function removeRemovedSampleData(data: DemoData): DemoData {
     meetingInvites: (data.meetingInvites ?? []).filter((invite) => activeUserIds.has(invite.senderId) && activeUserIds.has(invite.recipientId)),
     groupChatMessages: (data.groupChatMessages ?? []).filter((message) => activeUserIds.has(message.senderId)),
     meetingLogs: (data.meetingLogs ?? []).filter((log) => activeUserIds.has(log.startedById)),
+    announcements: data.announcements ?? [],
   };
 }
 
@@ -407,6 +445,7 @@ function mergeSeedUsers(data: DemoData) {
     meetingInvites: data.meetingInvites ?? [],
     groupChatMessages: data.groupChatMessages ?? [],
     meetingLogs: data.meetingLogs ?? [],
+    announcements: data.announcements ?? seedData.announcements,
   };
 }
 
@@ -418,6 +457,7 @@ function mergeLocalSecurityFields(remoteData: DemoData, localData: DemoData) {
     groupChatMessages: localData.groupChatMessages ?? [],
     meetingLogs: localData.meetingLogs ?? [],
     meetingTranscriptSegments: localData.meetingTranscriptSegments ?? [],
+    announcements: localData.announcements ?? remoteData.announcements ?? seedData.announcements,
     users: remoteData.users.map((remoteUser) => {
       const localUser = localData.users.find((user) => user.id === remoteUser.id || user.email.toLowerCase() === remoteUser.email.toLowerCase());
 
@@ -643,6 +683,7 @@ async function readSupabaseData(): Promise<DemoData | null> {
     meetingInvites: [],
     groupChatMessages: [],
     meetingLogs: [],
+    announcements: seedData.announcements,
   });
 }
 
@@ -1016,6 +1057,7 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
     meetingInvites: data.meetingInvites ?? [],
     groupChatMessages: data.groupChatMessages ?? [],
     meetingLogs: data.meetingLogs ?? [],
+    announcements: data.announcements ?? [],
     themeMode,
     setThemeMode,
     toggleThemeMode: () => setThemeMode((current) => (current === 'light' ? 'dark' : 'light')),
@@ -1845,6 +1887,10 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, message: 'Meeting not found.' };
       }
 
+      if (!session.hostId || session.hostId !== currentUser.id) {
+        return { ok: false, message: 'Only the meeting creator can start this meeting.' };
+      }
+
       const liveLog = (data.meetingLogs ?? []).find((log) => log.sessionId === sessionId && log.status === 'live');
 
       if (liveLog) {
@@ -1977,6 +2023,86 @@ export function AppRoleProvider({ children }: { children: React.ReactNode }) {
             ? { ...log, endedAt, durationMinutes, status: 'closed' }
             : log
         )),
+      }));
+
+      return { ok: true };
+    },
+    createAnnouncement: async (input) => {
+      if (!currentUser || role !== 'admin') {
+        return { ok: false, message: 'Only admins can create announcements.' };
+      }
+
+      if (!input.title.trim() || !input.content.trim()) {
+        return { ok: false, message: 'Please enter an announcement title and message.' };
+      }
+
+      const now = new Date().toISOString();
+      const announcement: Announcement = {
+        id: `announcement-${Date.now()}`,
+        title: input.title.trim(),
+        content: input.content.trim(),
+        createdById: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+        priority: input.priority,
+        pinned: input.pinned,
+        archived: false,
+      };
+
+      setData((current) => ({
+        ...current,
+        announcements: [announcement, ...(current.announcements ?? [])],
+      }));
+
+      return { ok: true };
+    },
+    updateAnnouncement: async (announcementId, input) => {
+      if (!currentUser || role !== 'admin') {
+        return { ok: false, message: 'Only admins can update announcements.' };
+      }
+
+      if (!input.title.trim() || !input.content.trim()) {
+        return { ok: false, message: 'Please enter an announcement title and message.' };
+      }
+
+      const existing = (data.announcements ?? []).find((announcement) => announcement.id === announcementId);
+
+      if (!existing) {
+        return { ok: false, message: 'Announcement not found.' };
+      }
+
+      setData((current) => ({
+        ...current,
+        announcements: (current.announcements ?? []).map((announcement) => (
+          announcement.id === announcementId
+            ? {
+                ...announcement,
+                title: input.title.trim(),
+                content: input.content.trim(),
+                priority: input.priority,
+                pinned: input.pinned,
+                archived: input.archived ?? announcement.archived,
+                updatedAt: new Date().toISOString(),
+              }
+            : announcement
+        )),
+      }));
+
+      return { ok: true };
+    },
+    deleteAnnouncement: async (announcementId) => {
+      if (!currentUser || role !== 'admin') {
+        return { ok: false, message: 'Only admins can delete announcements.' };
+      }
+
+      if (!(data.announcements ?? []).some((announcement) => announcement.id === announcementId)) {
+        return { ok: false, message: 'Announcement not found.' };
+      }
+
+      setData((current) => ({
+        ...current,
+        announcements: (current.announcements ?? []).filter((announcement) => announcement.id !== announcementId),
       }));
 
       return { ok: true };
